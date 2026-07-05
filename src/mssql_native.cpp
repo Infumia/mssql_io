@@ -203,8 +203,17 @@ MSSQL_EXPORT int64_t mssql_connect(
     // Named instances (host\INSTANCE) require TDS 7.0+ to resolve
     // via SQL Server Browser Service. Set via environment variable
     // if not already configured in freetds.conf
-    const char* tds_ver = getenv("TDSVER");
-    if (!tds_ver || strlen(tds_ver) == 0) {
+    #ifdef _WIN32
+        char* tds_ver_buf = NULL;
+        size_t tds_ver_len = 0;
+        _dupenv_s(&tds_ver_buf, &tds_ver_len, "TDSVER");
+        bool need_set_tds = (!tds_ver_buf || tds_ver_len == 0);
+        if (tds_ver_buf) free(tds_ver_buf);
+    #else
+        const char* tds_ver = getenv("TDSVER");
+        bool need_set_tds = (!tds_ver || strlen(tds_ver) == 0);
+    #endif
+    if (need_set_tds) {
         #ifdef _WIN32
             _putenv_s("TDSVER", "7.4");
         #else
