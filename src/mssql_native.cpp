@@ -40,6 +40,7 @@ static int error_handler(DBPROCESS* dbproc, int severity, int dberr, int oserr,
                         char* dberrstr, char* oserrstr) {
     g_freetds_error.clear();
     if (dberrstr) {
+        g_freetds_error += dberrstr;
         fprintf(stderr, "DB-Library error: %s\n", dberrstr);
     }
     if (oserrstr && oserr != 0) {
