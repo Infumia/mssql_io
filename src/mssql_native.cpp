@@ -29,6 +29,9 @@ struct MssqlConnection {
 static std::map<int64_t, MssqlConnection*> g_connections;
 static int64_t g_next_connection_id = 1;
 
+// Global last error for connection failures (before a handle is created)
+static std::string g_last_connect_error;
+
 // Error handler for FreeTDS
 static int error_handler(DBPROCESS* dbproc, int severity, int dberr, int oserr,
                         char* dberrstr, char* oserrstr) {
@@ -150,8 +153,10 @@ MSSQL_EXPORT int64_t mssql_connect(
     int32_t timeout
 ) {
     init_freetds();
+    g_last_connect_error.clear();
     
     if (!host || !database) {
+        g_last_connect_error = "Host and database are required";
         return -1;
     }
 
@@ -163,17 +168,15 @@ MSSQL_EXPORT int64_t mssql_connect(
 
     LOGINREC* login = dblogin();
     if (!login) {
+        g_last_connect_error = "Failed to create login record (dblogin failed)";
         return -2;
     }
 
     if (use_windows_auth) {
         // Windows Integrated Authentication (NTLM/Kerberos)
-        // DBSETLWINDOWS enables Windows authentication in FreeTDS
-        // If DBSETLWINDOWS is not available, empty user/pwd also triggers it
-        #ifdef DBSETLWINDOWS
-            DBSETLWINDOWS(login, 1);
-        #endif
-        // Still set empty credentials as fallback for older FreeTDS versions
+        // Enable NTLMv2 authentication via dbsetlbool
+        DBSETLNTLMV2(login, 1);
+        // Set empty credentials - FreeTDS will use Windows credentials
         DBSETLUSER(login, "");
         DBSETLPWD(login, "");
     } else {
@@ -183,14 +186,29 @@ MSSQL_EXPORT int64_t mssql_connect(
 
     DBSETLAPP(login, "mssql_io");
 
-    // Set trust server certificate
-    // FreeTDS uses environment variable TDS_SSL_VERIFY_SERVER_CERTIFICATE
-    // Set it before connecting if trust is requested
+    // Configure encryption and trust settings via environment variables
+    // These are read by FreeTDS during connection
     if (trust_server_certificate) {
+        // Accept self-signed certificates without CA validation
         #ifdef _WIN32
             _putenv_s("TDS_SSL_VERIFY_SERVER_CERTIFICATE", "0");
+            _putenv_s("TDS_ENCRYPTION", "off");
         #else
             setenv("TDS_SSL_VERIFY_SERVER_CERTIFICATE", "0", 1);
+            setenv("TDS_ENCRYPTION", "off", 1);
+        #endif
+    }
+
+    // Set TDS protocol version for named instance support
+    // Named instances (host\INSTANCE) require TDS 7.0+ to resolve
+    // via SQL Server Browser Service. Set via environment variable
+    // if not already configured in freetds.conf
+    const char* tds_ver = getenv("TDSVER");
+    if (!tds_ver || strlen(tds_ver) == 0) {
+        #ifdef _WIN32
+            _putenv_s("TDSVER", "7.4");
+        #else
+            setenv("TDSVER", "7.4", 1);
         #endif
     }
 
@@ -200,15 +218,19 @@ MSSQL_EXPORT int64_t mssql_connect(
     }
 
     // Connect to server
+    // For named instances (e.g. "host\INSTANCE"), FreeTDS needs TDS 7.0+
+    // to resolve via SQL Server Browser Service
     DBPROCESS* dbproc = dbopen(login, host);
     dbloginfree(login);
 
     if (!dbproc) {
+        g_last_connect_error = "Failed to open connection to server";
         return -3;
     }
 
     // Use database
     if (dbuse(dbproc, database) == FAIL) {
+        g_last_connect_error = "Failed to select database";
         dbclose(dbproc);
         return -4;
     }
@@ -473,6 +495,10 @@ MSSQL_EXPORT int32_t mssql_bulk_insert(
 MSSQL_EXPORT const char* mssql_get_last_error(int64_t connection_handle) {
     auto it = g_connections.find(connection_handle);
     if (it == g_connections.end()) {
+        // If no valid connection, return the global connection error
+        if (!g_last_connect_error.empty()) {
+            return alloc_string(g_last_connect_error);
+        }
         return alloc_string("Invalid connection handle");
     }
 

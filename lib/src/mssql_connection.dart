@@ -147,8 +147,16 @@ class MssqlConnection {
           );
         }
 
+        // Build detailed error message with connection info
+        final authMode = _config!.useWindowsAuthentication
+            ? 'Windows Authentication'
+            : 'SQL Authentication (user: ${_config!.username})';
+        final instanceInfo = _config!.host.contains('\\')
+            ? ' (named instance: ${_config!.host})'
+            : '';
+
         throw ConnectionException(
-          'Failed to connect to SQL Server',
+          'Failed to connect to SQL Server$instanceInfo using $authMode',
           details: error,
           errorCode: handle,
         );

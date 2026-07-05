@@ -17,7 +17,8 @@ static char* alloc_string(const char* str) {
 
 MSSQL_EXPORT int64_t mssql_connect(
     const char* host, int32_t port, const char* database,
-    const char* username, const char* password, int32_t timeout
+    const char* username, const char* password,
+    int32_t trust_server_certificate, int32_t timeout
 ) {
     // Stub: return error
     return -1000; // Error code indicating stub implementation
