@@ -298,7 +298,8 @@ static std::string write_temp_tds_conf(const std::string& hostname, int port) {
     char temp_file[MAX_PATH];
     GetTempFileNameA(temp_path, "tds", 0, temp_file);
 
-    FILE* f = fopen(temp_file, "w");
+    FILE* f = nullptr;
+    fopen_s(&f, temp_file, "w");
     if (!f) {
         return "";
     }
