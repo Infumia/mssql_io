@@ -205,9 +205,11 @@ set_target_properties(mssql_io PROPERTIES
     VISIBILITY_INLINES_HIDDEN ON
 )
 
+# Install targets
 install(TARGETS mssql_io
     LIBRARY DESTINATION lib
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
+    FRAMEWORK DESTINATION lib
     PUBLIC_HEADER DESTINATION include
 )
