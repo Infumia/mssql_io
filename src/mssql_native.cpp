@@ -131,9 +131,10 @@ static std::string json_escape(const std::string& str) {
 
 // Allocate and copy string (caller must free with mssql_free_string)
 static char* alloc_string(const std::string& str) {
-    char* result = (char*)malloc(str.length() + 1);
+    const size_t len = str.length() + 1;
+    char* result = (char*)malloc(len);
     if (result) {
-        strcpy(result, str.c_str());
+        memcpy(result, str.c_str(), len);
     }
     return result;
 }

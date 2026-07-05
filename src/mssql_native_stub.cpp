@@ -9,8 +9,9 @@
 
 static char* alloc_string(const char* str) {
     if (!str) return nullptr;
-    char* result = (char*)malloc(strlen(str) + 1);
-    if (result) strcpy(result, str);
+    const size_t len = strlen(str) + 1;
+    char* result = (char*)malloc(len);
+    if (result) memcpy(result, str, len);
     return result;
 }
 
