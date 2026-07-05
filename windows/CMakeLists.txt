@@ -35,8 +35,10 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   mssql_io
 )
 
-# Install plugin library
-#install(TARGETS ${PLUGIN_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-# Install native library
-#install(TARGETS mssql_io DESTINATION ${CMAKE_INSTALL_BINDIR})
+set(mssql_io_bundled_libraries
+  "$<TARGET_FILE:mssql_io>"
+  "$<TARGET_FILE_DIR:mssql_io>/sybdb.dll"
+  "$<TARGET_FILE_DIR:mssql_io>/libssl-3-x64.dll"
+  "$<TARGET_FILE_DIR:mssql_io>/libcrypto-3-x64.dll"
+  PARENT_SCOPE
+)
