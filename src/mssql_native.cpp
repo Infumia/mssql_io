@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <iomanip>
 
 // JSON helper (minimal implementation - for production, use a proper JSON library)
 #include <iostream>
