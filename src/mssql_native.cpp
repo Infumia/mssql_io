@@ -13,6 +13,15 @@
 // JSON helper (minimal implementation - for production, use a proper JSON library)
 #include <iostream>
 
+#ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+#endif
+
 // Connection structure
 struct MssqlConnection {
     DBPROCESS* dbproc;
@@ -151,6 +160,130 @@ static char* alloc_string(const std::string& str) {
     return result;
 }
 
+#ifdef _WIN32
+// Query SQL Server Browser Service (UDP 1434) to resolve dynamic port for a named instance.
+// Returns the TCP port number, or -1 on failure.
+static int resolve_browser_port(const char* hostname, const char* instance_name) {
+    if (!hostname || !instance_name || strlen(instance_name) == 0) {
+        return -1;
+    }
+
+    WSADATA wsa_data;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+        fprintf(stderr, "WSAStartup failed\n");
+        return -1;
+    }
+
+    SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock == INVALID_SOCKET) {
+        fprintf(stderr, "Failed to create UDP socket\n");
+        WSACleanup();
+        return -1;
+    }
+
+    // Set receive timeout (2 seconds)
+    int timeout_ms = 2000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+
+    // Set up server address (browser service runs on UDP 1434)
+    struct addrinfo hints = {}, *result = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "1434");
+
+    if (getaddrinfo(hostname, port_str, &hints, &result) != 0 || !result) {
+        fprintf(stderr, "Failed to resolve browser service host: %s\n", hostname);
+        closesocket(sock);
+        WSACleanup();
+        return -1;
+    }
+
+    // Build browser query packet: 0x04 + instance name (ASCII)
+    size_t instance_len = strlen(instance_name);
+    std::vector<unsigned char> packet(1 + instance_len);
+    packet[0] = 0x04;
+    memcpy(packet.data() + 1, instance_name, instance_len);
+
+    // Send query
+    int sent = sendto(sock, (const char*)packet.data(), (int)packet.size(), 0,
+                      result->ai_addr, (int)result->ai_addrlen);
+    freeaddrinfo(result);
+
+    if (sent == SOCKET_ERROR) {
+        fprintf(stderr, "Failed to send browser query\n");
+        closesocket(sock);
+        WSACleanup();
+        return -1;
+    }
+
+    // Receive response
+    char response[4096];
+    struct sockaddr_in from_addr = {};
+    int from_len = sizeof(from_addr);
+
+    int received = recvfrom(sock, response, sizeof(response) - 1, 0,
+                            (struct sockaddr*)&from_addr, &from_len);
+    closesocket(sock);
+    WSACleanup();
+
+    if (received <= 0) {
+        fprintf(stderr, "No response from SQL Server Browser Service\n");
+        return -1;
+    }
+    response[received] = '\0';
+
+    // Parse response: semicolon-delimited key-value pairs
+    // Look for "tcp" key and extract the port value
+    // Format: ServerName;...;tcp;56787;...
+    std::string resp(response, received);
+    std::istringstream ss(resp);
+    std::string token;
+    bool found_tcp = false;
+
+    while (std::getline(ss, token, ';')) {
+        if (found_tcp) {
+            // This token should be the port number
+            int port = 0;
+            for (char c : token) {
+                if (c >= '0' && c <= '9') {
+                    port = port * 10 + (c - '0');
+                } else {
+                    // Non-digit in what should be a port number
+                    port = 0;
+                    break;
+                }
+            }
+            if (port > 0 && port <= 65535) {
+                fprintf(stderr, "Browser service resolved port: %d\n", port);
+                return port;
+            }
+            break;
+        }
+        if (token == "tcp") {
+            found_tcp = true;
+        }
+    }
+
+    fprintf(stderr, "TCP port not found in browser service response\n");
+    return -1;
+}
+
+// Split "host\\INSTANCE" into hostname and instance name.
+// Returns true if the input contains a backslash (named instance).
+static bool split_host_instance(const std::string& host, std::string& hostname, std::string& instance) {
+    size_t pos = host.find('\\');
+    if (pos == std::string::npos) {
+        return false;
+    }
+    hostname = host.substr(0, pos);
+    instance = host.substr(pos + 1);
+    return !hostname.empty() && !instance.empty();
+}
+#endif
+
 // Connect to SQL Server
 MSSQL_EXPORT int64_t mssql_connect(
     const char* host,
@@ -168,6 +301,25 @@ MSSQL_EXPORT int64_t mssql_connect(
         g_last_connect_error = "Host and database are required";
         return -1;
     }
+
+    // Resolve named instance (host\INSTANCE) to dynamic port via SQL Server Browser Service
+    std::string actual_host = host;
+    #ifdef _WIN32
+    {
+        std::string hostname, instance_name;
+        if (split_host_instance(host, hostname, instance_name)) {
+            int resolved_port = resolve_browser_port(hostname.c_str(), instance_name.c_str());
+            if (resolved_port > 0) {
+                port = resolved_port;
+                actual_host = hostname;
+                fprintf(stderr, "Named instance '%s' resolved to port %d\n", instance_name.c_str(), port);
+            } else {
+                fprintf(stderr, "Warning: Could not resolve named instance '%s' via Browser Service, "
+                        "FreeTDS will attempt its own resolution\n", instance_name.c_str());
+            }
+        }
+    }
+    #endif
 
     // Determine authentication mode
     bool use_windows_auth = false;
