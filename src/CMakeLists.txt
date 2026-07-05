@@ -205,13 +205,9 @@ set_target_properties(mssql_io PROPERTIES
     VISIBILITY_INLINES_HIDDEN ON
 )
 
-# Install targets (only when built standalone, not as a subdirectory of a Flutter app)
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    install(TARGETS mssql_io
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        RUNTIME DESTINATION bin
-        PUBLIC_HEADER DESTINATION include
-    )
-endif()
-
+install(TARGETS mssql_io
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+    PUBLIC_HEADER DESTINATION include
+)
