@@ -192,34 +192,15 @@ MSSQL_EXPORT int64_t mssql_connect(
         // Accept self-signed certificates without CA validation
         #ifdef _WIN32
             _putenv_s("TDS_SSL_VERIFY_SERVER_CERTIFICATE", "0");
-            _putenv_s("TDS_ENCRYPTION", "off");
         #else
             setenv("TDS_SSL_VERIFY_SERVER_CERTIFICATE", "0", 1);
-            setenv("TDS_ENCRYPTION", "off", 1);
         #endif
     }
 
-    // Set TDS protocol version for named instance support
+    // Set TDS protocol version on the login record for named instance support
     // Named instances (host\INSTANCE) require TDS 7.0+ to resolve
-    // via SQL Server Browser Service. Set via environment variable
-    // if not already configured in freetds.conf
-    #ifdef _WIN32
-        char* tds_ver_buf = NULL;
-        size_t tds_ver_len = 0;
-        _dupenv_s(&tds_ver_buf, &tds_ver_len, "TDSVER");
-        bool need_set_tds = (!tds_ver_buf || tds_ver_len == 0);
-        if (tds_ver_buf) free(tds_ver_buf);
-    #else
-        const char* tds_ver = getenv("TDSVER");
-        bool need_set_tds = (!tds_ver || strlen(tds_ver) == 0);
-    #endif
-    if (need_set_tds) {
-        #ifdef _WIN32
-            _putenv_s("TDSVER", "7.4");
-        #else
-            setenv("TDSVER", "7.4", 1);
-        #endif
-    }
+    // via SQL Server Browser Service
+    DBSETLVERSION(login, DBTDS_7_4);
 
     if (timeout > 0) {
         dbsetlogintime(timeout);
