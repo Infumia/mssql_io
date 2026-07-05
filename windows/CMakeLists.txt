@@ -36,7 +36,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 )
 
 # Install plugin library
-install(TARGETS ${PLUGIN_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
+#install(TARGETS ${PLUGIN_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # Install native library
-install(TARGETS mssql_io DESTINATION ${CMAKE_INSTALL_BINDIR})
+#install(TARGETS mssql_io DESTINATION ${CMAKE_INSTALL_BINDIR})
