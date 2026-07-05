@@ -33,12 +33,18 @@ static int64_t g_next_connection_id = 1;
 static std::string g_last_connect_error;
 
 // Error handler for FreeTDS
+static std::string g_freetds_error;
+static std::string g_freetds_message;
+
 static int error_handler(DBPROCESS* dbproc, int severity, int dberr, int oserr,
                         char* dberrstr, char* oserrstr) {
+    g_freetds_error.clear();
     if (dberrstr) {
         fprintf(stderr, "DB-Library error: %s\n", dberrstr);
     }
     if (oserrstr && oserr != 0) {
+        if (!g_freetds_error.empty()) g_freetds_error += "; ";
+        g_freetds_error += oserrstr;
         fprintf(stderr, "Operating system error: %s\n", oserrstr);
     }
     return INT_CANCEL;
@@ -47,7 +53,9 @@ static int error_handler(DBPROCESS* dbproc, int severity, int dberr, int oserr,
 // Message handler for FreeTDS
 static int message_handler(DBPROCESS* dbproc, DBINT msgno, int msgstate, int severity,
                           char* msgtext, char* srvname, char* procname, int line) {
+    g_freetds_message.clear();
     if (msgtext) {
+        g_freetds_message = msgtext;
         fprintf(stderr, "SQL Server message %d: %s\n", (int)msgno, msgtext);
     }
     return 0;
@@ -211,12 +219,17 @@ MSSQL_EXPORT int64_t mssql_connect(
     // For named instances (e.g. "host\INSTANCE"), FreeTDS needs TDS 7.0+
     // to resolve via SQL Server Browser Service
     DBPROCESS* dbproc = dbopen(login, host);
-    dbloginfree(login);
 
     if (!dbproc) {
         g_last_connect_error = "Failed to open connection to server";
+        if (!g_freetds_error.empty()) {
+            g_last_connect_error += ": " + g_freetds_error;
+        }
+        dbloginfree(login);
         return -3;
     }
+
+    dbloginfree(login);
 
     // Use database
     if (dbuse(dbproc, database) == FAIL) {
