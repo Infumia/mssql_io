@@ -146,12 +146,19 @@ MSSQL_EXPORT int64_t mssql_connect(
     const char* database,
     const char* username,
     const char* password,
+    int32_t trust_server_certificate,
     int32_t timeout
 ) {
     init_freetds();
     
-    if (!host || !database || !username || !password) {
+    if (!host || !database) {
         return -1;
+    }
+
+    // Determine authentication mode
+    bool use_windows_auth = false;
+    if ((!username || strlen(username) == 0) && (!password || strlen(password) == 0)) {
+        use_windows_auth = true;
     }
 
     LOGINREC* login = dblogin();
@@ -159,10 +166,34 @@ MSSQL_EXPORT int64_t mssql_connect(
         return -2;
     }
 
-    DBSETLUSER(login, username);
-    DBSETLPWD(login, password);
+    if (use_windows_auth) {
+        // Windows Integrated Authentication (NTLM/Kerberos)
+        // DBSETLWINDOWS enables Windows authentication in FreeTDS
+        // If DBSETLWINDOWS is not available, empty user/pwd also triggers it
+        #ifdef DBSETLWINDOWS
+            DBSETLWINDOWS(login, 1);
+        #endif
+        // Still set empty credentials as fallback for older FreeTDS versions
+        DBSETLUSER(login, "");
+        DBSETLPWD(login, "");
+    } else {
+        DBSETLUSER(login, username);
+        DBSETLPWD(login, password);
+    }
+
     DBSETLAPP(login, "mssql_io");
-    
+
+    // Set trust server certificate
+    // FreeTDS uses environment variable TDS_SSL_VERIFY_SERVER_CERTIFICATE
+    // Set it before connecting if trust is requested
+    if (trust_server_certificate) {
+        #ifdef _WIN32
+            _putenv_s("TDS_SSL_VERIFY_SERVER_CERTIFICATE", "0");
+        #else
+            setenv("TDS_SSL_VERIFY_SERVER_CERTIFICATE", "0", 1);
+        #endif
+    }
+
     if (timeout > 0) {
         dbsetlogintime(timeout);
         dbsettime(timeout);

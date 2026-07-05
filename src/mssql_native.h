@@ -17,11 +17,17 @@ extern "C" {
 /**
  * Connect to SQL Server
  * 
+ * Supports two authentication modes:
+ * - SQL Server Authentication: Provide username and password.
+ * - Windows Integrated Authentication: Pass empty username and password.
+ *   The current Windows user credentials will be used.
+ * 
  * @param host Server hostname or IP address
  * @param port Server port (usually 1433)
  * @param database Database name
- * @param username SQL authentication username
- * @param password SQL authentication password
+ * @param username SQL authentication username (empty string for Windows auth)
+ * @param password SQL authentication password (empty string for Windows auth)
+ * @param trust_server_certificate If non-zero, trust the server certificate without validation
  * @param timeout Connection timeout in seconds
  * @return Connection handle (>0 on success, <=0 on error)
  */
@@ -31,6 +37,7 @@ MSSQL_EXPORT int64_t mssql_connect(
     const char* database,
     const char* username,
     const char* password,
+    int32_t trust_server_certificate,
     int32_t timeout
 );
 

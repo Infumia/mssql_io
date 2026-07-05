@@ -49,7 +49,12 @@ class MssqlConnection {
   ///
   /// Returns `true` on success, throws [ConnectionException] on failure.
   ///
-  /// Example:
+  /// Supports two authentication modes:
+  /// - **SQL Server Authentication**: Provide both [username] and [password].
+  /// - **Windows Integrated Authentication**: Omit both [username] and [password]
+  ///   (or pass null). Uses the current Windows user credentials.
+  ///
+  /// Example (SQL Authentication):
   /// ```dart
   /// final request = MssqlConnection.getInstance();
   /// final success = await request.connect(
@@ -61,12 +66,24 @@ class MssqlConnection {
   ///   timeoutInSeconds: 15,
   /// );
   /// ```
+  ///
+  /// Example (Windows Authentication):
+  /// ```dart
+  /// final request = MssqlConnection.getInstance();
+  /// final success = await request.connect(
+  ///   host: '192.168.1.100',
+  ///   port: 1433,
+  ///   databaseName: 'MyDatabase',
+  ///   trustServerCertificate: true,
+  /// );
+  /// ```
   Future<bool> connect({
     required String host,
     int port = 1433,
     required String databaseName,
-    required String username,
-    required String password,
+    String? username,
+    String? password,
+    bool trustServerCertificate = false,
     int timeoutInSeconds = 15,
     bool enableTls = true,
     bool autoReconnect = false,
@@ -83,6 +100,7 @@ class MssqlConnection {
       databaseName: databaseName,
       username: username,
       password: password,
+      trustServerCertificate: trustServerCertificate,
       timeoutInSeconds: timeoutInSeconds,
       enableTls: enableTls,
       autoReconnect: autoReconnect,
@@ -104,8 +122,9 @@ class MssqlConnection {
         host: _config!.host,
         port: _config!.port,
         database: _config!.databaseName,
-        username: _config!.username,
-        password: _config!.password,
+        username: _config!.username ?? '',
+        password: _config!.password ?? '',
+        trustServerCertificate: _config!.trustServerCertificate,
         timeout: _config!.timeoutInSeconds,
       );
 

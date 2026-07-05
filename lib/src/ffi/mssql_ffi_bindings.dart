@@ -47,6 +47,7 @@ class MssqlFfiBindings {
     required String database,
     required String username,
     required String password,
+    required bool trustServerCertificate,
     required int timeout,
   }) {
     final hostPtr = host.toNativeUtf8();
@@ -61,6 +62,7 @@ class MssqlFfiBindings {
         databasePtr.cast(),
         usernamePtr.cast(),
         passwordPtr.cast(),
+        trustServerCertificate ? 1 : 0,
         timeout,
       );
     } finally {
@@ -229,6 +231,7 @@ class _MssqlNativeFunctions {
         ffi.Pointer<Utf8>,
         ffi.Pointer<Utf8>,
         ffi.Int32,
+        ffi.Int32,
       ),
       int Function(
         ffi.Pointer<Utf8>,
@@ -236,6 +239,7 @@ class _MssqlNativeFunctions {
         ffi.Pointer<Utf8>,
         ffi.Pointer<Utf8>,
         ffi.Pointer<Utf8>,
+        int,
         int,
       )>('mssql_connect');
 

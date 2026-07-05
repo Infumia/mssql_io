@@ -19,6 +19,7 @@ class MockMssqlFfiBindings extends MssqlFfiBindings {
     required String database,
     required String username,
     required String password,
+    required bool trustServerCertificate,
     required int timeout,
   }) {
     final handle = nextConnectionHandle++;
@@ -188,6 +189,20 @@ void main() {
 
         expect(result, true);
         expect(connection.isConnected, true);
+      });
+
+      test('connects successfully with Windows authentication', () async {
+        final result = await connection.connect(
+          host: '192.168.1.100',
+          port: 1433,
+          databaseName: 'TestDB',
+          trustServerCertificate: true,
+        );
+
+        expect(result, true);
+        expect(connection.isConnected, true);
+        expect(connection.config?.useWindowsAuthentication, true);
+        expect(connection.config?.trustServerCertificate, true);
       });
 
       test('disconnect closes connection', () async {
