@@ -1,9 +1,4 @@
 cmake_minimum_required(VERSION 3.10)
-
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
-endif()
-
 project(mssql_io VERSION 0.0.6 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
@@ -96,7 +91,7 @@ elseif(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT USE_FREETDS)
 elseif(NOT USE_FREETDS)
     # Desktop platforms: Find system FreeTDS
     find_path(FREETDS_CHECK sybdb.h
-        PATHS /usr/include /usr/local/include /opt/homebrew/include /opt/local/include
+        PATHS /usr/include /usr/local/include /opt/homebrew/include /opt/local/include "$ENV{FREETDS_HOME}/include"
     )
     if(FREETDS_CHECK)
         set(USE_FREETDS ON)
