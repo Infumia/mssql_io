@@ -1,9 +1,4 @@
 cmake_minimum_required(VERSION 3.14)
-
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
-endif()
-
 project(mssql_io_windows VERSION 3.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 11)
