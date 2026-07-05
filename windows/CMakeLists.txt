@@ -35,8 +35,8 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   mssql_io
 )
 
-# FFI plugin: expose bundled libraries for Flutter to install
-set(mssql_io_bundled_libraries
-  "$<TARGET_FILE:mssql_io>"
-  PARENT_SCOPE
-)
+# Install plugin library
+install(TARGETS ${PLUGIN_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# Install native library
+install(TARGETS mssql_io DESTINATION ${CMAKE_INSTALL_BINDIR})
