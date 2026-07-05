@@ -30,7 +30,6 @@ struct MssqlConnection {
     std::string database;
     int port;
     bool in_transaction;
-    std::string temp_conf_path;
     
     MssqlConnection() : dbproc(nullptr), port(1433), in_transaction(false) {}
 };
@@ -72,22 +71,17 @@ static int message_handler(DBPROCESS* dbproc, DBINT msgno, int msgstate, int sev
     return 0;
 }
 
-// Initialize FreeTDS (called once, or forced to reinit when config changes)
-static void init_freetds(bool force_reinit = false) {
+// Initialize FreeTDS (called once)
+static void init_freetds() {
     static bool initialized = false;
-    if (force_reinit && initialized) {
-        dbexit();
-        initialized = false;
+    if (initialized) return;
+    if (dbinit() == FAIL) {
+        fprintf(stderr, "Failed to initialize FreeTDS\n");
+        return;
     }
-    if (!initialized) {
-        if (dbinit() == FAIL) {
-            fprintf(stderr, "Failed to initialize FreeTDS\n");
-            return;
-        }
-        dberrhandle(error_handler);
-        dbmsghandle(message_handler);
-        initialized = true;
-    }
+    dberrhandle(error_handler);
+    dbmsghandle(message_handler);
+    initialized = true;
 }
 
 // Base64 encoding for binary data
@@ -288,20 +282,19 @@ static bool split_host_instance(const std::string& host, std::string& hostname, 
     return !hostname.empty() && !instance.empty();
 }
 
-// Write a temporary freetds.conf with the resolved port for a named instance.
-// Returns the path to the temp file, or empty string on failure.
-// The caller is responsible for deleting the file.
-static std::string write_temp_tds_conf(const std::string& hostname, int port) {
-    char temp_path[MAX_PATH];
-    GetTempPathA(MAX_PATH, temp_path);
-
-    char temp_file[MAX_PATH];
-    GetTempFileNameA(temp_path, "tds", 0, temp_file);
+// Write a freetds.conf with the resolved port for a named instance.
+// Writes to c:\freetds.conf (FreeTDS compile-time default on Windows)
+// and sets the FREETDSCONF env var as a fallback.
+// Returns true on success.
+static bool write_tds_conf(const std::string& hostname, int port) {
+    // Write to c:\freetds.conf (FreeTDS compile-time default: FREETDS_SYSCONFFILE)
+    const char* conf_path = "c:\\freetds.conf";
 
     FILE* f = nullptr;
-    fopen_s(&f, temp_file, "w");
+    fopen_s(&f, conf_path, "w");
     if (!f) {
-        return "";
+        fprintf(stderr, "Failed to write freetds.conf to %s\n", conf_path);
+        return false;
     }
 
     fprintf(f, "[global]\n");
@@ -314,9 +307,12 @@ static std::string write_temp_tds_conf(const std::string& hostname, int port) {
     fprintf(f, "    client charset = UTF-8\n");
     fclose(f);
 
-    fprintf(stderr, "Created temp freetds.conf: %s (host=%s, port=%d)\n",
-            temp_file, hostname.c_str(), port);
-    return std::string(temp_file);
+    // Also set FREETDSCONF env var as fallback (note: NO underscore)
+    _putenv_s("FREETDSCONF", conf_path);
+
+    fprintf(stderr, "Wrote freetds.conf: %s (host=%s, port=%d)\n",
+            conf_path, hostname.c_str(), port);
+    return true;
 }
 #endif
 
@@ -338,10 +334,8 @@ MSSQL_EXPORT int64_t mssql_connect(
     }
 
     // Resolve named instance (host\INSTANCE) to dynamic port via SQL Server Browser Service.
-    // This must happen BEFORE init_freetds() so we can set FREETDS_CONF env var
-    // before dbinit() reads the config file.
+    // The resolved port is written to c:\freetds.conf so FreeTDS can use it at dbopen() time.
     std::string actual_host = host;
-    std::string temp_conf_path;
     #ifdef _WIN32
     {
         std::string hostname, instance_name;
@@ -349,12 +343,10 @@ MSSQL_EXPORT int64_t mssql_connect(
             int resolved_port = resolve_browser_port(hostname.c_str(), instance_name.c_str());
             if (resolved_port > 0) {
                 port = resolved_port;
-                temp_conf_path = write_temp_tds_conf(hostname, resolved_port);
-                if (!temp_conf_path.empty()) {
-                    _putenv_s("FREETDS_CONF", temp_conf_path.c_str());
+                if (write_tds_conf(hostname, resolved_port)) {
+                    actual_host = "mssql_io_resolved";
+                    fprintf(stderr, "Named instance '%s' resolved to port %d\n", instance_name.c_str(), port);
                 }
-                actual_host = "mssql_io_resolved";
-                fprintf(stderr, "Named instance '%s' resolved to port %d\n", instance_name.c_str(), port);
             } else {
                 fprintf(stderr, "Warning: Could not resolve named instance '%s' via Browser Service, "
                         "FreeTDS will attempt its own resolution\n", instance_name.c_str());
@@ -363,10 +355,8 @@ MSSQL_EXPORT int64_t mssql_connect(
     }
     #endif
 
-    // Initialize FreeTDS AFTER setting FREETDS_CONF env var (if resolved a named instance)
-    // so dbinit() reads the correct config file. Force reinit if we changed the config.
-    bool needs_reinit = !temp_conf_path.empty();
-    init_freetds(needs_reinit);
+    // Initialize FreeTDS
+    init_freetds();
     bool use_windows_auth = false;
     if ((!username || strlen(username) == 0) && (!password || strlen(password) == 0)) {
         use_windows_auth = true;
@@ -443,7 +433,6 @@ MSSQL_EXPORT int64_t mssql_connect(
     request->host = host;
     request->database = database;
     request->port = port;
-    request->temp_conf_path = temp_conf_path;
 
     int64_t conn_id = g_next_connection_id++;
     g_connections[conn_id] = request;
@@ -461,10 +450,6 @@ MSSQL_EXPORT int32_t mssql_disconnect(int64_t connection_handle) {
     MssqlConnection* request = it->second;
     if (request->dbproc) {
         dbclose(request->dbproc);
-    }
-    // Clean up temporary freetds.conf if we created one
-    if (!request->temp_conf_path.empty()) {
-        remove(request->temp_conf_path.c_str());
     }
     delete request;
     g_connections.erase(it);
