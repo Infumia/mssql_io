@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'models/connection_config.dart';
@@ -90,7 +91,15 @@ class MssqlConnection {
     int maxReconnectAttempts = 3,
     int reconnectDelaySeconds = 2,
   }) async {
+    await _debugLog(
+      'connect() requested host=$host port=$port database=$databaseName '
+      'auth=${username == null && password == null ? 'windows' : 'sql'} '
+      'username=${username ?? ''} trustServerCertificate=$trustServerCertificate '
+      'timeout=${timeoutInSeconds}s enableTls=$enableTls',
+    );
+
     if (_isConnected) {
+      await _debugLog('Existing connection detected; disconnecting before reconnect');
       await disconnect();
     }
 
@@ -118,6 +127,7 @@ class MssqlConnection {
     }
 
     try {
+      await _debugLog('Native connect attempt starting with ${_config.toString()}');
       final handle = _bindings.connect(
         host: _config!.host,
         port: _config!.port,
@@ -127,9 +137,11 @@ class MssqlConnection {
         trustServerCertificate: _config!.trustServerCertificate,
         timeout: _config!.timeoutInSeconds,
       );
+      await _debugLog('Native connect returned handle=$handle');
 
       if (handle <= 0) {
         final error = _getLastError(handle);
+        await _debugLog('Native connect failed handle=$handle error=$error');
 
         // Check if this is the stub implementation error
         if (handle == -1000 || error.contains('FreeTDS not available')) {
@@ -165,8 +177,10 @@ class MssqlConnection {
       _connectionHandle = handle;
       _isConnected = true;
       _reconnectAttempts = 0;
+      await _debugLog('Connection established handle=$handle');
       return true;
     } catch (e) {
+      await _debugLog('Connection attempt threw ${e.runtimeType}: $e');
       if (e is ConnectionException) rethrow;
       throw ConnectionException(
         'Connection failed',
@@ -181,11 +195,13 @@ class MssqlConnection {
   Future<void> disconnect() async {
     if (_connectionHandle != null) {
       try {
+        await _debugLog('Disconnecting handle=$_connectionHandle');
         if (_isInTransaction) {
           await rollback();
         }
         _bindings.disconnect(_connectionHandle!);
       } catch (e) {
+        await _debugLog('Disconnect warning: $e');
         debugPrint('Warning: Error during disconnect: $e');
       } finally {
         _connectionHandle = null;
@@ -547,6 +563,27 @@ class MssqlConnection {
       return _bindings.getStringAndFree(errorPtr);
     } catch (e) {
       return 'Unknown error';
+    }
+  }
+
+  static String get debugLogPath {
+    final explicitPath = Platform.environment['MSSQL_IO_LOG_FILE'];
+    if (explicitPath != null && explicitPath.isNotEmpty) {
+      return explicitPath;
+    }
+    return '${Directory.systemTemp.path}${Platform.pathSeparator}mssql_io.log';
+  }
+
+  static Future<void> _debugLog(String message) async {
+    try {
+      final file = File(debugLogPath);
+      await file.writeAsString(
+        '[${DateTime.now().toIso8601String()}] [dart] $message\n',
+        mode: FileMode.append,
+        flush: true,
+      );
+    } catch (_) {
+      // Logging must never change database behavior.
     }
   }
 

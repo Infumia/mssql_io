@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <algorithm>
 #include <iomanip>
+#include <ctime>
+#include <cerrno>
 
 // JSON helper (minimal implementation - for production, use a proper JSON library)
 #include <iostream>
@@ -21,6 +23,96 @@
     #include <ws2tcpip.h>
     #pragma comment(lib, "ws2_32.lib")
 #endif
+
+static std::string get_debug_log_path() {
+    const char* explicit_path = getenv("MSSQL_IO_LOG_FILE");
+    if (explicit_path && explicit_path[0] != '\0') {
+        return explicit_path;
+    }
+
+#ifdef _WIN32
+    const char* temp_dir = getenv("TEMP");
+    if (!temp_dir || temp_dir[0] == '\0') {
+        temp_dir = getenv("TMP");
+    }
+    if (temp_dir && temp_dir[0] != '\0') {
+        std::string path(temp_dir);
+        if (path.back() != '\\' && path.back() != '/') {
+            path += "\\";
+        }
+        path += "mssql_io.log";
+        return path;
+    }
+    return "mssql_io.log";
+#else
+    const char* temp_dir = getenv("TMPDIR");
+    if (!temp_dir || temp_dir[0] == '\0') {
+        temp_dir = "/tmp";
+    }
+    std::string path(temp_dir);
+    if (path.back() != '/') {
+        path += "/";
+    }
+    path += "mssql_io.log";
+    return path;
+#endif
+}
+
+static std::string get_temp_file_path(const std::string& file_name) {
+#ifdef _WIN32
+    const char* temp_dir = getenv("TEMP");
+    if (!temp_dir || temp_dir[0] == '\0') {
+        temp_dir = getenv("TMP");
+    }
+    if (temp_dir && temp_dir[0] != '\0') {
+        std::string path(temp_dir);
+        if (path.back() != '\\' && path.back() != '/') {
+            path += "\\";
+        }
+        path += file_name;
+        return path;
+    }
+    return file_name;
+#else
+    const char* temp_dir = getenv("TMPDIR");
+    if (!temp_dir || temp_dir[0] == '\0') {
+        temp_dir = "/tmp";
+    }
+    std::string path(temp_dir);
+    if (path.back() != '/') {
+        path += "/";
+    }
+    path += file_name;
+    return path;
+#endif
+}
+
+static void debug_log(const std::string& message) {
+    const std::string path = get_debug_log_path();
+    FILE* f = nullptr;
+#ifdef _WIN32
+    fopen_s(&f, path.c_str(), "a");
+#else
+    f = fopen(path.c_str(), "a");
+#endif
+    if (!f) {
+        return;
+    }
+
+    std::time_t now = std::time(nullptr);
+    char time_buffer[32] = {0};
+#ifdef _WIN32
+    tm local_time = {};
+    localtime_s(&local_time, &now);
+    std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &local_time);
+#else
+    tm local_time = {};
+    localtime_r(&now, &local_time);
+    std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &local_time);
+#endif
+    fprintf(f, "[%s] [native] %s\n", time_buffer, message.c_str());
+    fclose(f);
+}
 
 // Connection structure
 struct MssqlConnection {
@@ -51,11 +143,23 @@ static int error_handler(DBPROCESS* dbproc, int severity, int dberr, int oserr,
     if (dberrstr) {
         g_freetds_error += dberrstr;
         fprintf(stderr, "DB-Library error: %s\n", dberrstr);
+        std::ostringstream oss;
+        oss << "DB-Library error"
+            << " severity=" << severity
+            << " dberr=" << dberr
+            << " oserr=" << oserr
+            << " message=" << dberrstr;
+        debug_log(oss.str());
     }
     if (oserrstr && oserr != 0) {
         if (!g_freetds_error.empty()) g_freetds_error += "; ";
         g_freetds_error += oserrstr;
         fprintf(stderr, "Operating system error: %s\n", oserrstr);
+        std::ostringstream oss;
+        oss << "Operating system error"
+            << " oserr=" << oserr
+            << " message=" << oserrstr;
+        debug_log(oss.str());
     }
     return INT_CANCEL;
 }
@@ -67,6 +171,16 @@ static int message_handler(DBPROCESS* dbproc, DBINT msgno, int msgstate, int sev
     if (msgtext) {
         g_freetds_message = msgtext;
         fprintf(stderr, "SQL Server message %d: %s\n", (int)msgno, msgtext);
+        std::ostringstream oss;
+        oss << "SQL Server message"
+            << " msgno=" << (int)msgno
+            << " state=" << msgstate
+            << " severity=" << severity
+            << " server=" << (srvname ? srvname : "")
+            << " proc=" << (procname ? procname : "")
+            << " line=" << line
+            << " text=" << msgtext;
+        debug_log(oss.str());
     }
     return 0;
 }
@@ -77,11 +191,13 @@ static void init_freetds() {
     if (initialized) return;
     if (dbinit() == FAIL) {
         fprintf(stderr, "Failed to initialize FreeTDS\n");
+        debug_log("Failed to initialize FreeTDS");
         return;
     }
     dberrhandle(error_handler);
     dbmsghandle(message_handler);
     initialized = true;
+    debug_log("FreeTDS initialized and handlers registered");
 }
 
 // Base64 encoding for binary data
@@ -170,12 +286,14 @@ static int resolve_browser_port(const char* hostname, const char* instance_name)
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
         fprintf(stderr, "WSAStartup failed\n");
+        debug_log("SQL Browser lookup failed: WSAStartup failed");
         return -1;
     }
 
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET) {
         fprintf(stderr, "Failed to create UDP socket\n");
+        debug_log("SQL Browser lookup failed: failed to create UDP socket");
         WSACleanup();
         return -1;
     }
@@ -195,6 +313,7 @@ static int resolve_browser_port(const char* hostname, const char* instance_name)
 
     if (getaddrinfo(hostname, port_str, &hints, &result) != 0 || !result) {
         fprintf(stderr, "Failed to resolve browser service host: %s\n", hostname);
+        debug_log(std::string("SQL Browser lookup failed: could not resolve host ") + hostname);
         closesocket(sock);
         WSACleanup();
         return -1;
@@ -213,6 +332,7 @@ static int resolve_browser_port(const char* hostname, const char* instance_name)
 
     if (sent == SOCKET_ERROR) {
         fprintf(stderr, "Failed to send browser query\n");
+        debug_log(std::string("SQL Browser lookup failed: sendto failed for instance ") + instance_name);
         closesocket(sock);
         WSACleanup();
         return -1;
@@ -230,6 +350,7 @@ static int resolve_browser_port(const char* hostname, const char* instance_name)
 
     if (received <= 0) {
         fprintf(stderr, "No response from SQL Server Browser Service\n");
+        debug_log(std::string("SQL Browser lookup failed: no UDP 1434 response from ") + hostname);
         return -1;
     }
     response[received] = '\0';
@@ -257,6 +378,11 @@ static int resolve_browser_port(const char* hostname, const char* instance_name)
             }
             if (port > 0 && port <= 65535) {
                 fprintf(stderr, "Browser service resolved port: %d\n", port);
+                std::ostringstream oss;
+                oss << "SQL Browser resolved instance " << instance_name
+                    << " on host " << hostname
+                    << " to tcp port " << port;
+                debug_log(oss.str());
                 return port;
             }
             break;
@@ -267,6 +393,7 @@ static int resolve_browser_port(const char* hostname, const char* instance_name)
     }
 
     fprintf(stderr, "TCP port not found in browser service response\n");
+    debug_log(std::string("SQL Browser lookup failed: tcp port not found in response: ") + resp);
     return -1;
 }
 
@@ -283,17 +410,25 @@ static bool split_host_instance(const std::string& host, std::string& hostname, 
 }
 
 // Write a freetds.conf with the resolved port for a named instance.
-// Writes to c:\freetds.conf (FreeTDS compile-time default on Windows)
-// and sets the FREETDSCONF env var as a fallback.
+// The file goes in the user's temp directory because normal desktop users
+// often cannot write to c:\. FREETDSCONF points FreeTDS at this file.
 // Returns true on success.
 static bool write_tds_conf(const std::string& hostname, int port) {
-    // Write to c:\freetds.conf (FreeTDS compile-time default: FREETDS_SYSCONFFILE)
-    const char* conf_path = "c:\\freetds.conf";
+    const std::string conf_path = get_temp_file_path("mssql_io_freetds.conf");
 
     FILE* f = nullptr;
-    fopen_s(&f, conf_path, "w");
+#ifdef _WIN32
+    fopen_s(&f, conf_path.c_str(), "w");
+#else
+    f = fopen(conf_path.c_str(), "w");
+#endif
     if (!f) {
-        fprintf(stderr, "Failed to write freetds.conf to %s\n", conf_path);
+        fprintf(stderr, "Failed to write freetds.conf to %s\n", conf_path.c_str());
+        std::ostringstream oss;
+        oss << "Failed to write FreeTDS config to " << conf_path
+            << " errno=" << errno
+            << " error=" << strerror(errno);
+        debug_log(oss.str());
         return false;
     }
 
@@ -308,10 +443,19 @@ static bool write_tds_conf(const std::string& hostname, int port) {
     fclose(f);
 
     // Also set FREETDSCONF env var as fallback (note: NO underscore)
-    _putenv_s("FREETDSCONF", conf_path);
+#ifdef _WIN32
+    _putenv_s("FREETDSCONF", conf_path.c_str());
+#else
+    setenv("FREETDSCONF", conf_path.c_str(), 1);
+#endif
 
     fprintf(stderr, "Wrote freetds.conf: %s (host=%s, port=%d)\n",
-            conf_path, hostname.c_str(), port);
+            conf_path.c_str(), hostname.c_str(), port);
+    std::ostringstream oss;
+    oss << "Wrote FreeTDS config " << conf_path
+        << " for host=" << hostname
+        << " port=" << port;
+    debug_log(oss.str());
     return true;
 }
 #endif
@@ -330,7 +474,23 @@ MSSQL_EXPORT int64_t mssql_connect(
     
     if (!host || !database) {
         g_last_connect_error = "Host and database are required";
+        debug_log("Connection failed before start: host or database was null");
         return -1;
+    }
+
+    {
+        const bool use_windows_auth =
+            (!username || strlen(username) == 0) && (!password || strlen(password) == 0);
+        std::ostringstream oss;
+        oss << "Connection attempt started"
+            << " host=" << host
+            << " port=" << port
+            << " database=" << database
+            << " auth=" << (use_windows_auth ? "windows" : "sql")
+            << " trust_server_certificate=" << trust_server_certificate
+            << " timeout=" << timeout
+            << " log_file=" << get_debug_log_path();
+        debug_log(oss.str());
     }
 
     // Resolve named instance (host\INSTANCE) to dynamic port via SQL Server Browser Service.
@@ -340,16 +500,21 @@ MSSQL_EXPORT int64_t mssql_connect(
     {
         std::string hostname, instance_name;
         if (split_host_instance(host, hostname, instance_name)) {
+            debug_log(std::string("Named instance detected: host=") + hostname + " instance=" + instance_name);
             int resolved_port = resolve_browser_port(hostname.c_str(), instance_name.c_str());
             if (resolved_port > 0) {
                 port = resolved_port;
                 if (write_tds_conf(hostname, resolved_port)) {
                     actual_host = "mssql_io_resolved";
                     fprintf(stderr, "Named instance '%s' resolved to port %d\n", instance_name.c_str(), port);
+                    debug_log(std::string("Named instance will connect through FreeTDS alias mssql_io_resolved"));
+                } else {
+                    debug_log(std::string("Named instance resolved but FreeTDS config write failed; using original host ") + actual_host);
                 }
             } else {
                 fprintf(stderr, "Warning: Could not resolve named instance '%s' via Browser Service, "
                         "FreeTDS will attempt its own resolution\n", instance_name.c_str());
+                debug_log(std::string("Named instance resolution failed; passing original host to FreeTDS: ") + actual_host);
             }
         }
     }
@@ -365,10 +530,12 @@ MSSQL_EXPORT int64_t mssql_connect(
     LOGINREC* login = dblogin();
     if (!login) {
         g_last_connect_error = "Failed to create login record (dblogin failed)";
+        debug_log(g_last_connect_error);
         return -2;
     }
 
     if (use_windows_auth) {
+        debug_log("Configuring FreeTDS login for Windows Integrated Authentication");
         // Windows Integrated Authentication (NTLM/Kerberos)
         // Enable NTLMv2 authentication via dbsetlbool
         DBSETLNTLMV2(login, 1);
@@ -376,6 +543,7 @@ MSSQL_EXPORT int64_t mssql_connect(
         DBSETLUSER(login, "");
         DBSETLPWD(login, "");
     } else {
+        debug_log(std::string("Configuring FreeTDS login for SQL Authentication user=") + (username ? username : ""));
         DBSETLUSER(login, username);
         DBSETLPWD(login, password);
     }
@@ -391,6 +559,7 @@ MSSQL_EXPORT int64_t mssql_connect(
         #else
             setenv("TDS_SSL_VERIFY_SERVER_CERTIFICATE", "0", 1);
         #endif
+        debug_log("Configured FreeTDS to skip server certificate verification");
     }
 
     // Set TDS protocol version on the login record for named instance support
@@ -407,6 +576,7 @@ MSSQL_EXPORT int64_t mssql_connect(
     // For resolved named instances, actual_host is "mssql_io_resolved" which maps to
     // our temp freetds.conf entry with the correct port.
     // For direct connections, actual_host is the original host string.
+    debug_log(std::string("Calling dbopen with server name ") + actual_host);
     DBPROCESS* dbproc = dbopen(login, actual_host.c_str());
 
     if (!dbproc) {
@@ -414,18 +584,31 @@ MSSQL_EXPORT int64_t mssql_connect(
         if (!g_freetds_error.empty()) {
             g_last_connect_error += ": " + g_freetds_error;
         }
+        if (!g_freetds_message.empty()) {
+            g_last_connect_error += "; server message: " + g_freetds_message;
+        }
+        debug_log(std::string("Connection failed at dbopen: ") + g_last_connect_error);
         dbloginfree(login);
         return -3;
     }
 
     dbloginfree(login);
+    debug_log("dbopen succeeded");
 
     // Use database
     if (dbuse(dbproc, database) == FAIL) {
         g_last_connect_error = "Failed to select database";
+        if (!g_freetds_error.empty()) {
+            g_last_connect_error += ": " + g_freetds_error;
+        }
+        if (!g_freetds_message.empty()) {
+            g_last_connect_error += "; server message: " + g_freetds_message;
+        }
+        debug_log(g_last_connect_error);
         dbclose(dbproc);
         return -4;
     }
+    debug_log(std::string("Database selected: ") + database);
 
     // Create connection structure
     MssqlConnection* request = new MssqlConnection();
@@ -437,6 +620,15 @@ MSSQL_EXPORT int64_t mssql_connect(
     int64_t conn_id = g_next_connection_id++;
     g_connections[conn_id] = request;
 
+    {
+        std::ostringstream oss;
+        oss << "Connection succeeded handle=" << conn_id
+            << " original_host=" << host
+            << " actual_host=" << actual_host
+            << " port=" << port
+            << " database=" << database;
+        debug_log(oss.str());
+    }
     return conn_id;
 }
 
