@@ -20,6 +20,7 @@ class MockMssqlFfiBindings extends MssqlFfiBindings {
     required String username,
     required String password,
     required bool trustServerCertificate,
+    required bool enableTls,
     required int timeout,
   }) {
     final handle = nextConnectionHandle++;

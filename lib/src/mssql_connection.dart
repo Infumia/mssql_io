@@ -86,7 +86,7 @@ class MssqlConnection {
     String? password,
     bool trustServerCertificate = false,
     int timeoutInSeconds = 15,
-    bool enableTls = true,
+    bool enableTls = false,
     bool autoReconnect = false,
     int maxReconnectAttempts = 3,
     int reconnectDelaySeconds = 2,
@@ -135,6 +135,7 @@ class MssqlConnection {
         username: _config!.username ?? '',
         password: _config!.password ?? '',
         trustServerCertificate: _config!.trustServerCertificate,
+        enableTls: _config!.enableTls,
         timeout: _config!.timeoutInSeconds,
       );
       await _debugLog('Native connect returned handle=$handle');

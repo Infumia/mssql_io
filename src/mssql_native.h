@@ -28,6 +28,7 @@ extern "C" {
  * @param username SQL authentication username (empty string for Windows auth)
  * @param password SQL authentication password (empty string for Windows auth)
  * @param trust_server_certificate If non-zero, trust the server certificate without validation
+ * @param enable_tls If non-zero, request TLS encryption; otherwise force FreeTDS encryption off
  * @param timeout Connection timeout in seconds
  * @return Connection handle (>0 on success, <=0 on error)
  */
@@ -38,6 +39,7 @@ MSSQL_EXPORT int64_t mssql_connect(
     const char* username,
     const char* password,
     int32_t trust_server_certificate,
+    int32_t enable_tls,
     int32_t timeout
 );
 

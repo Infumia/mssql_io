@@ -48,7 +48,7 @@ class ConnectionConfig {
     this.password,
     this.trustServerCertificate = false,
     this.timeoutInSeconds = 15,
-    this.enableTls = true,
+    this.enableTls = false,
     this.autoReconnect = false,
     this.maxReconnectAttempts = 3,
     this.reconnectDelaySeconds = 2,

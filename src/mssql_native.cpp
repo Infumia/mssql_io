@@ -421,7 +421,7 @@ static bool split_host_instance(const std::string& host, std::string& hostname, 
 // The primary connection path uses "host:port" directly because that avoids
 // depending on FreeTDS loading a temporary config alias.
 // Returns true on success.
-static bool write_tds_conf(const std::string& hostname, int port) {
+static bool write_tds_conf(const std::string& hostname, int port, bool enable_tls) {
     const std::string conf_path = get_temp_file_path("mssql_io_freetds.conf");
 
     FILE* f = nullptr;
@@ -443,11 +443,18 @@ static bool write_tds_conf(const std::string& hostname, int port) {
     fprintf(f, "[global]\n");
     fprintf(f, "    tds version = 7.4\n");
     fprintf(f, "    client charset = UTF-8\n\n");
+    fprintf(f, "[%s]\n", hostname.c_str());
+    fprintf(f, "    host = %s\n", hostname.c_str());
+    fprintf(f, "    port = %d\n", port);
+    fprintf(f, "    tds version = 7.4\n");
+    fprintf(f, "    client charset = UTF-8\n");
+    fprintf(f, "    encryption = %s\n\n", enable_tls ? "request" : "off");
     fprintf(f, "[mssql_io_resolved]\n");
     fprintf(f, "    host = %s\n", hostname.c_str());
     fprintf(f, "    port = %d\n", port);
     fprintf(f, "    tds version = 7.4\n");
     fprintf(f, "    client charset = UTF-8\n");
+    fprintf(f, "    encryption = %s\n", enable_tls ? "request" : "off");
     fclose(f);
 
     // Also set FREETDSCONF env var as fallback (note: NO underscore)
@@ -458,7 +465,8 @@ static bool write_tds_conf(const std::string& hostname, int port) {
     std::ostringstream oss;
     oss << "Wrote FreeTDS config " << conf_path
         << " for host=" << hostname
-        << " port=" << port;
+        << " port=" << port
+        << " encryption=" << (enable_tls ? "request" : "off");
     debug_log(oss.str());
     return true;
 }
@@ -472,6 +480,7 @@ MSSQL_EXPORT int64_t mssql_connect(
     const char* username,
     const char* password,
     int32_t trust_server_certificate,
+    int32_t enable_tls,
     int32_t timeout
 ) {
     g_last_connect_error.clear();
@@ -492,6 +501,7 @@ MSSQL_EXPORT int64_t mssql_connect(
             << " database=" << database
             << " auth=" << (use_windows_auth ? "windows" : "sql")
             << " trust_server_certificate=" << trust_server_certificate
+            << " enable_tls=" << enable_tls
             << " timeout=" << timeout
             << " log_file=" << get_debug_log_path();
         debug_log(oss.str());
@@ -503,6 +513,14 @@ MSSQL_EXPORT int64_t mssql_connect(
     set_env_var("TDSDUMPCONFIG", tds_config_dump_path);
     debug_log(std::string("Enabled FreeTDS dumps TDSDUMP=") + tds_dump_path +
               " TDSDUMPCONFIG=" + tds_config_dump_path);
+
+    if (!enable_tls) {
+        set_env_var("TDSENCRYPTION", "off");
+        debug_log("Configured FreeTDS encryption off through TDSENCRYPTION=off");
+    } else {
+        set_env_var("TDSENCRYPTION", "request");
+        debug_log("Configured FreeTDS encryption request through TDSENCRYPTION=request");
+    }
 
     // Resolve named instance (host\INSTANCE) to dynamic port via SQL Server Browser Service.
     std::string actual_host = host;
@@ -517,7 +535,12 @@ MSSQL_EXPORT int64_t mssql_connect(
                 std::ostringstream endpoint;
                 endpoint << hostname << ":" << resolved_port;
                 actual_host = endpoint.str();
-                write_tds_conf(hostname, resolved_port);
+                write_tds_conf(hostname, resolved_port, enable_tls != 0);
+                {
+                    std::ostringstream port_value;
+                    port_value << resolved_port;
+                    set_env_var("TDSPORT", port_value.str());
+                }
                 fprintf(stderr, "Named instance '%s' resolved to port %d\n", instance_name.c_str(), port);
                 debug_log(std::string("Named instance will connect directly through resolved endpoint ") + actual_host);
             } else {

@@ -18,7 +18,7 @@ void main() {
       expect(config.password, 'Password123');
       expect(config.trustServerCertificate, false);
       expect(config.timeoutInSeconds, 15);
-      expect(config.enableTls, true);
+      expect(config.enableTls, false);
       expect(config.autoReconnect, false);
       expect(config.useWindowsAuthentication, false);
     });
