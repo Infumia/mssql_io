@@ -817,7 +817,8 @@ MSSQL_EXPORT int32_t mssql_execute_write(
         return 0;
     }
 
-    return (int32_t)DBCOUNT(dbproc);
+    DBINT count = DBCOUNT(dbproc);
+    return count > 0 ? (int32_t)count : 0;
 }
 
 // Execute write with parameters
