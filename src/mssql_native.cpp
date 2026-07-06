@@ -25,18 +25,11 @@
 #endif
 
 static std::string get_debug_log_path() {
-    const char* explicit_path = getenv("MSSQL_IO_LOG_FILE");
-    if (explicit_path && explicit_path[0] != '\0') {
-        return explicit_path;
-    }
-
 #ifdef _WIN32
-    const char* temp_dir = getenv("TEMP");
-    if (!temp_dir || temp_dir[0] == '\0') {
-        temp_dir = getenv("TMP");
-    }
-    if (temp_dir && temp_dir[0] != '\0') {
-        std::string path(temp_dir);
+    char temp_buf[MAX_PATH] = {0};
+    DWORD len = GetTempPathA(MAX_PATH, temp_buf);
+    if (len > 0 && len < MAX_PATH) {
+        std::string path(temp_buf);
         if (path.back() != '\\' && path.back() != '/') {
             path += "\\";
         }
@@ -45,27 +38,16 @@ static std::string get_debug_log_path() {
     }
     return "mssql_io.log";
 #else
-    const char* temp_dir = getenv("TMPDIR");
-    if (!temp_dir || temp_dir[0] == '\0') {
-        temp_dir = "/tmp";
-    }
-    std::string path(temp_dir);
-    if (path.back() != '/') {
-        path += "/";
-    }
-    path += "mssql_io.log";
-    return path;
+    return "/tmp/mssql_io.log";
 #endif
 }
 
 static std::string get_temp_file_path(const std::string& file_name) {
 #ifdef _WIN32
-    const char* temp_dir = getenv("TEMP");
-    if (!temp_dir || temp_dir[0] == '\0') {
-        temp_dir = getenv("TMP");
-    }
-    if (temp_dir && temp_dir[0] != '\0') {
-        std::string path(temp_dir);
+    char temp_buf[MAX_PATH] = {0};
+    DWORD len = GetTempPathA(MAX_PATH, temp_buf);
+    if (len > 0 && len < MAX_PATH) {
+        std::string path(temp_buf);
         if (path.back() != '\\' && path.back() != '/') {
             path += "\\";
         }
@@ -74,14 +56,7 @@ static std::string get_temp_file_path(const std::string& file_name) {
     }
     return file_name;
 #else
-    const char* temp_dir = getenv("TMPDIR");
-    if (!temp_dir || temp_dir[0] == '\0') {
-        temp_dir = "/tmp";
-    }
-    std::string path(temp_dir);
-    if (path.back() != '/') {
-        path += "/";
-    }
+    std::string path("/tmp/");
     path += file_name;
     return path;
 #endif
@@ -432,10 +407,16 @@ static bool write_tds_conf(const std::string& hostname, int port, bool enable_tl
 #endif
     if (!f) {
         fprintf(stderr, "Failed to write freetds.conf to %s\n", conf_path.c_str());
+        char err_buf[256] = {0};
+#ifdef _WIN32
+        strerror_s(err_buf, sizeof(err_buf), errno);
+#else
+        strerror_r(errno, err_buf, sizeof(err_buf));
+#endif
         std::ostringstream oss;
         oss << "Failed to write FreeTDS config to " << conf_path
             << " errno=" << errno
-            << " error=" << strerror(errno);
+            << " error=" << err_buf;
         debug_log(oss.str());
         return false;
     }
