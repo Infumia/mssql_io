@@ -87,6 +87,14 @@ static std::string get_temp_file_path(const std::string& file_name) {
 #endif
 }
 
+static void set_env_var(const char* name, const std::string& value) {
+#ifdef _WIN32
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
 static void debug_log(const std::string& message) {
     const std::string path = get_debug_log_path();
     FILE* f = nullptr;
@@ -409,9 +417,9 @@ static bool split_host_instance(const std::string& host, std::string& hostname, 
     return !hostname.empty() && !instance.empty();
 }
 
-// Write a freetds.conf with the resolved port for a named instance.
-// The file goes in the user's temp directory because normal desktop users
-// often cannot write to c:\. FREETDSCONF points FreeTDS at this file.
+// Write a freetds.conf with the resolved port for diagnostics/fallback.
+// The primary connection path uses "host:port" directly because that avoids
+// depending on FreeTDS loading a temporary config alias.
 // Returns true on success.
 static bool write_tds_conf(const std::string& hostname, int port) {
     const std::string conf_path = get_temp_file_path("mssql_io_freetds.conf");
@@ -443,11 +451,7 @@ static bool write_tds_conf(const std::string& hostname, int port) {
     fclose(f);
 
     // Also set FREETDSCONF env var as fallback (note: NO underscore)
-#ifdef _WIN32
-    _putenv_s("FREETDSCONF", conf_path.c_str());
-#else
-    setenv("FREETDSCONF", conf_path.c_str(), 1);
-#endif
+    set_env_var("FREETDSCONF", conf_path);
 
     fprintf(stderr, "Wrote freetds.conf: %s (host=%s, port=%d)\n",
             conf_path.c_str(), hostname.c_str(), port);
@@ -493,8 +497,14 @@ MSSQL_EXPORT int64_t mssql_connect(
         debug_log(oss.str());
     }
 
+    const std::string tds_dump_path = get_temp_file_path("mssql_io_tdsdump.log");
+    const std::string tds_config_dump_path = get_temp_file_path("mssql_io_tdsconfig.log");
+    set_env_var("TDSDUMP", tds_dump_path);
+    set_env_var("TDSDUMPCONFIG", tds_config_dump_path);
+    debug_log(std::string("Enabled FreeTDS dumps TDSDUMP=") + tds_dump_path +
+              " TDSDUMPCONFIG=" + tds_config_dump_path);
+
     // Resolve named instance (host\INSTANCE) to dynamic port via SQL Server Browser Service.
-    // The resolved port is written to c:\freetds.conf so FreeTDS can use it at dbopen() time.
     std::string actual_host = host;
     #ifdef _WIN32
     {
@@ -504,13 +514,12 @@ MSSQL_EXPORT int64_t mssql_connect(
             int resolved_port = resolve_browser_port(hostname.c_str(), instance_name.c_str());
             if (resolved_port > 0) {
                 port = resolved_port;
-                if (write_tds_conf(hostname, resolved_port)) {
-                    actual_host = "mssql_io_resolved";
-                    fprintf(stderr, "Named instance '%s' resolved to port %d\n", instance_name.c_str(), port);
-                    debug_log(std::string("Named instance will connect through FreeTDS alias mssql_io_resolved"));
-                } else {
-                    debug_log(std::string("Named instance resolved but FreeTDS config write failed; using original host ") + actual_host);
-                }
+                std::ostringstream endpoint;
+                endpoint << hostname << ":" << resolved_port;
+                actual_host = endpoint.str();
+                write_tds_conf(hostname, resolved_port);
+                fprintf(stderr, "Named instance '%s' resolved to port %d\n", instance_name.c_str(), port);
+                debug_log(std::string("Named instance will connect directly through resolved endpoint ") + actual_host);
             } else {
                 fprintf(stderr, "Warning: Could not resolve named instance '%s' via Browser Service, "
                         "FreeTDS will attempt its own resolution\n", instance_name.c_str());
@@ -573,8 +582,7 @@ MSSQL_EXPORT int64_t mssql_connect(
     }
 
     // Connect to server
-    // For resolved named instances, actual_host is "mssql_io_resolved" which maps to
-    // our temp freetds.conf entry with the correct port.
+    // For resolved named instances, actual_host is "hostname:port".
     // For direct connections, actual_host is the original host string.
     debug_log(std::string("Calling dbopen with server name ") + actual_host);
     DBPROCESS* dbproc = dbopen(login, actual_host.c_str());
